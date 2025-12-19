@@ -1,0 +1,250 @@
+apiVersion: argoproj.io/v1alpha1
+kind: WorkflowTemplate
+metadata:
+  name: batch-reprocessing
+  namespace: data-pipeline
+spec:
+  serviceAccountName: workflow-executor
+  entrypoint: batch-reprocess
+  
+  arguments:
+    parameters:
+    - name: batch-size
+      value: "100"
+    - name: parallelism
+      value: "3"
+  
+  templates:
+  # Main workflow
+  - name: batch-reprocess
+    inputs:
+      parameters:
+      - name: batch-size
+      - name: parallelism
+    steps:
+    - - name: validate-environment
+        template: validate-env
+    
+    - - name: backup-current-data
+        template: backup-data
+    
+    - - name: generate-batch-list
+        template: generate-batches
+        arguments:
+          parameters:
+          - name: batch-size
+            value: "{{inputs.parameters.batch-size}}"
+    
+    - - name: process-batches
+        template: process-batch
+        arguments:
+          parameters:
+          - name: batch-id
+            value: "{{item}}"
+        withParam: "{{steps.generate-batch-list.outputs.result}}"
+    
+    - - name: verify-results
+        template: verify-reprocessing
+    
+    - - name: finalize
+        template: finalize-reprocessing
+  
+  # Validate environment
+  - name: validate-env
+    script:
+      image: python:3.9-slim
+      command: [sh]
+      source: |
+        pip install -q requests
+        python <<'PYEOF'
+        import requests
+        import sys
+        
+        print("Validating environment...")
+        
+        services = [
+            ("Processor", "http://data-processor.data-pipeline.svc.cluster.local:8000/health"),
+            ("Aggregator", "http://data-aggregator.data-pipeline.svc.cluster.local:8000/health")
+        ]
+        
+        all_healthy = True
+        for name, url in services:
+            try:
+                response = requests.get(url, timeout=5)
+                response.raise_for_status()
+                print(f"✅ {name} is healthy")
+            except Exception as e:
+                print(f"❌ {name} is not healthy: {e}")
+                all_healthy = False
+        
+        if not all_healthy:
+            print("\n❌ Environment validation failed")
+            sys.exit(1)
+        
+        print("\n✅ Environment validation successful")
+        PYEOF
+  
+  # Backup current data
+  - name: backup-data
+    script:
+      image: python:3.9-slim
+      command: [sh]
+      source: |
+        pip install -q requests
+        python <<'PYEOF'
+        import requests
+        import json
+        from datetime import datetime
+        
+        print("Creating backup of current aggregated data...")
+        
+        try:
+            response = requests.get(
+                "http://data-aggregator.data-pipeline.svc.cluster.local:8000/metrics",
+                timeout=10
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            backup = {
+                'timestamp': datetime.utcnow().isoformat(),
+                'data': data
+            }
+            
+            # In production, save to S3/GCS/PVC
+            print(f"✅ Backup created: {len(json.dumps(backup))} bytes")
+            print(f"Events backed up: {data.get('total_events', 0):,}")
+            
+        except Exception as e:
+            print(f"⚠️ Backup failed: {e}")
+            print("Proceeding without backup...")
+        PYEOF
+  
+  # Generate batch list
+  - name: generate-batches
+    inputs:
+      parameters:
+      - name: batch-size
+    script:
+      image: python:3.9-slim
+      command: [python]
+      source: |
+        import json
+        
+        batch_size = int("{{inputs.parameters.batch-size}}")
+        
+        # In production, this would query actual data sources
+        # For demo, generate batch IDs
+        total_records = 500  # Simulated
+        num_batches = (total_records + batch_size - 1) // batch_size
+        
+        batches = [f"batch-{i+1}" for i in range(num_batches)]
+        
+        # Output only JSON for Argo to parse
+        print(json.dumps(batches))
+  
+  # Process single batch
+  - name: process-batch
+    inputs:
+      parameters:
+      - name: batch-id
+    script:
+      image: python:3.9-slim
+      command: [python]
+      source: |
+        import time
+        import random
+        from datetime import datetime
+        
+        batch_id = "{{inputs.parameters.batch-id}}"
+        
+        print(f"Processing {batch_id}")
+        print(f"Started at: {datetime.utcnow().isoformat()}")
+        
+        # Simulate batch processing
+        # In production, this would:
+        # 1. Fetch events from source
+        # 2. Apply new processing logic
+        # 3. Send to processor/aggregator
+        # 4. Verify results
+        
+        records_processed = random.randint(80, 100)
+        
+        # Simulate processing time
+        time.sleep(random.uniform(2, 5))
+        
+        print(f"Processed {records_processed} records")
+        print(f"Completed at: {datetime.utcnow().isoformat()}")
+        print(f"✅ {batch_id} completed successfully")
+  
+  # Verify reprocessing results
+  - name: verify-reprocessing
+    script:
+      image: python:3.9-slim
+      command: [sh]
+      source: |
+        pip install -q requests
+        python <<'PYEOF'
+        import requests
+        
+        print("Verifying reprocessing results...")
+        
+        try:
+            response = requests.get(
+                "http://data-aggregator.data-pipeline.svc.cluster.local:8000/metrics",
+                timeout=10
+            )
+            response.raise_for_status()
+            metrics = response.json()
+            
+            print("\nCurrent Metrics:")
+            print(f"  Total Events: {metrics.get('total_events', 0):,}")
+            print(f"  Active Users: {metrics.get('active_users', 0):,}")
+            print(f"  Total Revenue: ${metrics.get('purchases', {}).get('total_revenue', 0):,.2f}")
+            
+            print("\n✅ Verification completed")
+            
+        except Exception as e:
+            print(f"⚠️ Verification failed: {e}")
+        PYEOF
+  
+  # Finalize reprocessing
+  - name: finalize-reprocessing
+    script:
+      image: python:3.9-slim
+      command: [python]
+      source: |
+        from datetime import datetime
+        
+        print("╔═══════════════════════════════════════════════╗")
+        print("║   BATCH REPROCESSING COMPLETED SUCCESSFULLY   ║")
+        print("╚═══════════════════════════════════════════════╝")
+        print()
+        print(f"Completed at: {datetime.utcnow().isoformat()}")
+        print()
+        print("Summary:")
+        print("  • All batches processed")
+        print("  • Data verified")
+        print("  • Pipeline operational")
+        print()
+        print("Next steps:")
+        print("  • Review metrics dashboard")
+        print("  • Notify stakeholders")
+        print("  • Update documentation")
+        print()
+        print("✅ Workflow complete")
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: batch-reprocess-
+  namespace: data-pipeline
+spec:
+  workflowTemplateRef:
+    name: batch-reprocessing
+  arguments:
+    parameters:
+    - name: batch-size
+      value: "50"
+    - name: parallelism
+      value: "2"

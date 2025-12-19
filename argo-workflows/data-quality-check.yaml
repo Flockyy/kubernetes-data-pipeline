@@ -1,0 +1,234 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: data-quality-check
+  namespace: data-pipeline
+spec:
+  schedule: "*/15 * * * *"  # Run every 15 minutes
+  timezone: "UTC"
+  concurrencyPolicy: "Allow"
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 3
+  workflowSpec:
+    serviceAccountName: workflow-executor
+    entrypoint: quality-check-pipeline
+    
+    templates:
+    - name: quality-check-pipeline
+      dag:
+        tasks:
+        - name: check-aggregator-health
+          template: health-check
+          arguments:
+            parameters:
+            - name: service-name
+              value: "data-aggregator"
+            - name: service-url
+              value: "http://data-aggregator.data-pipeline.svc.cluster.local:8000/health"
+        
+        - name: check-processor-health
+          template: health-check
+          arguments:
+            parameters:
+            - name: service-name
+              value: "data-processor"
+            - name: service-url
+              value: "http://data-processor.data-pipeline.svc.cluster.local:8000/health"
+        
+        - name: validate-metrics
+          template: validate-metrics
+          dependencies: [check-aggregator-health]
+        
+        - name: check-event-rates
+          template: check-event-rates
+          dependencies: [check-aggregator-health]
+        
+        - name: summary-report
+          template: summary-report
+          dependencies: [check-aggregator-health, check-processor-health, validate-metrics, check-event-rates]
+          arguments:
+            parameters:
+            - name: aggregator-status
+              value: "{{tasks.check-aggregator-health.outputs.result}}"
+            - name: processor-status
+              value: "{{tasks.check-processor-health.outputs.result}}"
+            - name: metrics-status
+              value: "{{tasks.validate-metrics.outputs.result}}"
+            - name: rates-status
+              value: "{{tasks.check-event-rates.outputs.result}}"
+    
+    # Template: Health check
+    - name: health-check
+      inputs:
+        parameters:
+        - name: service-name
+        - name: service-url
+      script:
+        image: python:3.9-slim
+        command: [sh]
+        source: |
+          pip install -q requests
+          python <<'PYEOF'
+          import requests
+          import sys
+          
+          service = "{{inputs.parameters.service-name}}"
+          url = "{{inputs.parameters.service-url}}"
+          
+          try:
+              response = requests.get(url, timeout=5)
+              response.raise_for_status()
+              print(f"✅ {service} is healthy")
+              print("PASSED")
+          except Exception as e:
+              print(f"❌ {service} health check failed: {e}")
+              print("FAILED")
+              sys.exit(1)
+          PYEOF
+    
+    # Template: Validate metrics
+    - name: validate-metrics
+      script:
+        image: python:3.9-slim
+        command: [sh]
+        source: |
+          pip install -q requests
+          python <<'PYEOF'
+          import requests
+          import sys
+          
+          url = "http://data-aggregator.data-pipeline.svc.cluster.local:8000/metrics"
+          
+          try:
+              response = requests.get(url, timeout=5)
+              response.raise_for_status()
+              metrics = response.json()
+              
+              # Validation checks
+              checks = []
+              
+              # Check 1: Total events should be non-negative
+              total_events = metrics.get('total_events', 0)
+              if total_events >= 0:
+                  checks.append(('Total events valid', True))
+              else:
+                  checks.append(('Total events valid', False))
+              
+              # Check 2: Revenue consistency
+              purchases = metrics.get('purchases', {})
+              if purchases.get('count', 0) > 0:
+                  expected_avg = purchases.get('total_revenue', 0) / purchases['count']
+                  actual_avg = purchases.get('avg_amount', 0)
+                  if abs(expected_avg - actual_avg) < 0.01:
+                      checks.append(('Revenue calculations consistent', True))
+                  else:
+                      checks.append(('Revenue calculations consistent', False))
+              
+              # Check 3: Data freshness
+              last_update = metrics.get('last_update')
+              if last_update:
+                  checks.append(('Data is being updated', True))
+              else:
+                  checks.append(('Data is being updated', False))
+              
+              # Print results
+              print("Data Quality Validation Results:")
+              print("─" * 50)
+              all_passed = True
+              for check_name, passed in checks:
+                  status = "✅ PASSED" if passed else "❌ FAILED"
+                  print(f"{check_name}: {status}")
+                  if not passed:
+                      all_passed = False
+              
+              if all_passed:
+                  print("\n✅ All validation checks passed")
+                  print("PASSED")
+              else:
+                  print("\n⚠️ Some validation checks failed")
+                  print("FAILED")
+                  sys.exit(1)
+                  
+          except Exception as e:
+              print(f"❌ Validation failed: {e}")
+              print("FAILED")
+              sys.exit(1)
+          PYEOF
+    
+    # Template: Check event rates
+    - name: check-event-rates
+      script:
+        image: python:3.9-slim
+        command: [sh]
+        source: |
+          pip install -q requests
+          python <<'PYEOF'
+          import requests
+          import sys
+          from datetime import datetime
+          
+          url = "http://data-aggregator.data-pipeline.svc.cluster.local:8000/metrics"
+          
+          try:
+              response = requests.get(url, timeout=5)
+              response.raise_for_status()
+              metrics = response.json()
+              
+              total_events = metrics.get('total_events', 0)
+              
+              # Simple rate check
+              print("Event Rate Analysis:")
+              print("─" * 50)
+              print(f"Total events processed: {total_events:,}")
+              
+              if total_events == 0:
+                  print("⚠️ WARNING: No events detected")
+                  print("This might indicate:")
+                  print("  - Generator not running")
+                  print("  - Processor not forwarding events")
+                  print("  - Pipeline issue")
+                  print("FAILED")
+                  sys.exit(1)
+              elif total_events < 10:
+                  print("⚠️ WARNING: Very low event count")
+                  print("PASSED")
+              else:
+                  print("✅ Event processing is active")
+                  print("PASSED")
+                  
+          except Exception as e:
+              print(f"❌ Rate check failed: {e}")
+              print("FAILED")
+              sys.exit(1)
+          PYEOF
+    
+    # Template: Summary report
+    - name: summary-report
+      inputs:
+        parameters:
+        - name: aggregator-status
+        - name: processor-status
+        - name: metrics-status
+        - name: rates-status
+      script:
+        image: python:3.9-slim
+        command: [python]
+        source: |
+          from datetime import datetime
+          
+          print("╔═══════════════════════════════════════════════╗")
+          print("║     DATA QUALITY CHECK SUMMARY REPORT         ║")
+          print("╚═══════════════════════════════════════════════╝")
+          print()
+          print(f"Timestamp: {datetime.utcnow().isoformat()}")
+          print()
+          print("Service Health:")
+          print(f"  • Aggregator:  {{inputs.parameters.aggregator-status}}")
+          print(f"  • Processor:   {{inputs.parameters.processor-status}}")
+          print()
+          print("Data Quality:")
+          print(f"  • Metrics:     {{inputs.parameters.metrics-status}}")
+          print(f"  • Event Rates: {{inputs.parameters.rates-status}}")
+          print()
+          print("─" * 50)
+          print("✅ Quality check workflow completed")

@@ -1,0 +1,160 @@
+apiVersion: argoproj.io/v1alpha1
+kind: CronWorkflow
+metadata:
+  name: daily-aggregation
+  namespace: data-pipeline
+spec:
+  schedule: "0 2 * * *"  # Run at 2 AM daily
+  timezone: "America/New_York"
+  concurrencyPolicy: "Forbid"
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  workflowSpec:
+    serviceAccountName: workflow-executor
+    entrypoint: daily-aggregation-pipeline
+    
+    templates:
+    - name: daily-aggregation-pipeline
+      steps:
+      - - name: fetch-metrics
+          template: fetch-metrics
+      - - name: process-data
+          template: process-data
+          arguments:
+            parameters:
+            - name: metrics-data
+              value: "{{steps.fetch-metrics.outputs.result}}"
+      - - name: generate-report
+          template: generate-report
+          arguments:
+            parameters:
+            - name: processed-data
+              value: "{{steps.process-data.outputs.result}}"
+      - - name: notify
+          template: notify
+          arguments:
+            parameters:
+            - name: report
+              value: "{{steps.generate-report.outputs.result}}"
+    
+    # Step 1: Fetch metrics from aggregator
+    - name: fetch-metrics
+      script:
+        image: python:3.9-slim
+        command: [sh]
+        source: |
+          pip install -q requests
+          python <<'PYEOF'
+          import requests
+          import json
+          import sys
+          
+          try:
+              response = requests.get(
+                  "http://data-aggregator.data-pipeline.svc.cluster.local:8000/metrics",
+                  timeout=10
+              )
+              response.raise_for_status()
+              metrics = response.json()
+              
+              print(f"Fetched metrics: {metrics['total_events']} total events")
+              print(json.dumps(metrics))
+          except Exception as e:
+              print(f"Error fetching metrics: {e}")
+              sys.exit(1)
+          PYEOF
+    
+    # Step 2: Process and analyze data
+    - name: process-data
+      inputs:
+        parameters:
+        - name: metrics-data
+      script:
+        image: python:3.9-slim
+        command: [python]
+        source: |
+          import json
+          import sys
+          from datetime import datetime
+          
+          metrics = json.loads('''{{inputs.parameters.metrics-data}}''')
+          
+          # Calculate daily statistics
+          processed = {
+              'date': datetime.utcnow().isoformat(),
+              'total_events': metrics.get('total_events', 0),
+              'active_users': metrics.get('active_users', 0),
+              'total_revenue': metrics.get('purchases', {}).get('total_revenue', 0),
+              'purchases_count': metrics.get('purchases', {}).get('count', 0),
+              'avg_purchase': metrics.get('purchases', {}).get('avg_amount', 0),
+              'top_event_type': max(
+                  metrics.get('events_by_type', {}).items(),
+                  key=lambda x: x[1],
+                  default=('none', 0)
+              )[0],
+              'mobile_percentage': (
+                  metrics.get('events_by_device', {}).get('mobile', 0) / 
+                  max(metrics.get('total_events', 1), 1) * 100
+              )
+          }
+          
+          print("Processed daily statistics:")
+          print(json.dumps(processed, indent=2))
+    
+    # Step 3: Generate report
+    - name: generate-report
+      inputs:
+        parameters:
+        - name: processed-data
+      script:
+        image: python:3.9-slim
+        command: [python]
+        source: |
+          import json
+          from datetime import datetime
+          
+          data = json.loads('''{{inputs.parameters.processed-data}}''')
+          
+          report = f"""
+          ═══════════════════════════════════════════════
+          📊 DAILY DATA PIPELINE REPORT
+          ═══════════════════════════════════════════════
+          
+          Date: {datetime.utcnow().strftime('%Y-%m-%d')}
+          
+          📈 EVENT STATISTICS
+          ───────────────────────────────────────────────
+          Total Events:        {data['total_events']:,}
+          Active Users:        {data['active_users']:,}
+          Top Event Type:      {data['top_event_type']}
+          Mobile Traffic:      {data['mobile_percentage']:.1f}%
+          
+          💰 REVENUE STATISTICS
+          ───────────────────────────────────────────────
+          Total Revenue:       ${data['total_revenue']:,.2f}
+          Purchase Count:      {data['purchases_count']:,}
+          Average Purchase:    ${data['avg_purchase']:.2f}
+          
+          ═══════════════════════════════════════════════
+          Generated by Argo Workflows
+          """
+          
+          print(report)
+    
+    # Step 4: Send notification
+    - name: notify
+      inputs:
+        parameters:
+        - name: report
+      script:
+        image: python:3.9-slim
+        command: [python]
+        source: |
+          print("✅ Daily aggregation workflow completed successfully!")
+          print("Report generated and ready for distribution")
+          print("")
+          print("Next steps would include:")
+          print("- Send email with report")
+          print("- Upload to S3/GCS bucket")
+          print("- Update dashboard")
+          print("- Trigger alerts if thresholds exceeded")

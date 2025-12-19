@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: data-generator
+  namespace: data-pipeline
+  labels:
+    app: data-generator
+    tier: producer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: data-generator
+  template:
+    metadata:
+      labels:
+        app: data-generator
+        tier: producer
+    spec:
+      containers:
+      - name: generator
+        image: data-generator:latest
+        imagePullPolicy: IfNotPresent
+        env:
+        - name: PROCESSOR_URL
+          valueFrom:
+            configMapKeyRef:
+              name: pipeline-config
+              key: PROCESSOR_URL
+        - name: GENERATION_INTERVAL
+          valueFrom:
+            configMapKeyRef:
+              name: pipeline-config
+              key: GENERATION_INTERVAL
+        - name: BATCH_SIZE
+          valueFrom:
+            configMapKeyRef:
+              name: pipeline-config
+              key: BATCH_SIZE
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          exec:
+            command:
+            - python
+            - -c
+            - "import sys; sys.exit(0)"
+          initialDelaySeconds: 30
+          periodSeconds: 30

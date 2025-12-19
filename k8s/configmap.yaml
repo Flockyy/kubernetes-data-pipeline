@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pipeline-config
+  namespace: data-pipeline
+data:
+  # Data Generator Configuration
+  GENERATION_INTERVAL: "2"
+  BATCH_SIZE: "5"
+  
+  # Data Processor Configuration
+  PROCESSING_DELAY: "0.1"
+  
+  # Data Aggregator Configuration
+  CLEANUP_INTERVAL: "300"
+  RETENTION_SECONDS: "3600"
+  
+  # Service URLs
+  PROCESSOR_URL: "http://data-processor:8000"
+  AGGREGATOR_URL: "http://data-aggregator:8000"
