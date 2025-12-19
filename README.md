@@ -1,4 +1,4 @@
-# Kubernetes Data Engineering Pipeline
+./setup-local-dev.sh# Kubernetes Data Engineering Pipeline
 
 A showcase project demonstrating Kubernetes capabilities through a real-time data pipeline.
 
@@ -41,29 +41,54 @@ This project implements a distributed data pipeline with three microservices:
 - Kind (Kubernetes in Docker)
 - kubectl CLI tool
 - Python 3.9+
+- [uv](https://github.com/astral-sh/uv) for fast Python environment management (optional for local dev)
 
 ## Quick Start
 
-### 1. Build Docker Images
+### 1. Local Development Setup (Optional)
+
+Set up Python environments for local development using uv:
+
+```bash
+./setup-local-dev.sh
+```
+
+This creates virtual environments for each service and installs dependencies 10-100x faster than pip.
+
+To run services locally:
+```bash
+# Terminal 1 - Processor (runs on port 8000)
+cd data-processor && source .venv/bin/activate && python app.py
+
+# Terminal 2 - Aggregator (runs on port 8000)
+cd data-aggregator && source .venv/bin/activate && python app.py
+
+# Terminal 3 - Generator (connects to processor)
+cd data-generator && source .venv/bin/activate && python app.py
+```
+
+### 2. Build Docker Images
 
 ```bash
 ./build.sh
 ```
 
-### 2. Deploy to Kubernetes
+This builds all three microservices using uv for fast dependency installation.
+
+### 3. Deploy to Kubernetes
 
 ```bash
 ./deploy.sh
 ```
 
-### 3. Check Status
+### 4. Check Status
 
 ```bash
 kubectl get pods -n data-pipeline
 kubectl get services -n data-pipeline
 ```
 
-### 4. View Logs
+### 5. View Logs
 
 ```bash
 # Generator logs
@@ -76,7 +101,7 @@ kubectl logs -f -l app=data-processor -n data-pipeline
 kubectl logs -f -l app=data-aggregator -n data-pipeline
 ```
 
-### 5. Access Metrics Dashboard
+### 6. Access Metrics Dashboard
 
 ```bash
 kubectl port-forward -n data-pipeline svc/data-aggregator 8080:8080
@@ -84,7 +109,7 @@ kubectl port-forward -n data-pipeline svc/data-aggregator 8080:8080
 
 Then visit: http://localhost:8080/metrics
 
-### 6. Scale the Pipeline
+### 7. Scale the Pipeline
 
 ```bash
 # Scale processor to 3 replicas
@@ -94,7 +119,7 @@ kubectl scale deployment data-processor -n data-pipeline --replicas=3
 kubectl get pods -n data-pipeline -w
 ```
 
-### 7. Setup Argo Workflows (Optional)
+### 8. Setup Argo Workflows (Optional)
 
 ```bash
 # Install Argo Workflows
