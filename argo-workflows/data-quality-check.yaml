@@ -216,6 +216,12 @@ spec:
         source: |
           from datetime import datetime
           
+          # Read status from parameters (sanitized)
+          agg_status = "{{inputs.parameters.aggregator-status}}".strip()
+          proc_status = "{{inputs.parameters.processor-status}}".strip()
+          metrics_status = "{{inputs.parameters.metrics-status}}".strip()
+          rates_status = "{{inputs.parameters.rates-status}}".strip()
+          
           print("╔═══════════════════════════════════════════════╗")
           print("║     DATA QUALITY CHECK SUMMARY REPORT         ║")
           print("╚═══════════════════════════════════════════════╝")
@@ -223,12 +229,12 @@ spec:
           print(f"Timestamp: {datetime.utcnow().isoformat()}")
           print()
           print("Service Health:")
-          print(f"  • Aggregator:  {{inputs.parameters.aggregator-status}}")
-          print(f"  • Processor:   {{inputs.parameters.processor-status}}")
+          print(f"  • Aggregator:  {agg_status}")
+          print(f"  • Processor:   {proc_status}")
           print()
           print("Data Quality:")
-          print(f"  • Metrics:     {{inputs.parameters.metrics-status}}")
-          print(f"  • Event Rates: {{inputs.parameters.rates-status}}")
+          print(f"  • Metrics:     {metrics_status}")
+          print(f"  • Event Rates: {rates_status}")
           print()
           print("─" * 50)
           print("✅ Quality check workflow completed")
